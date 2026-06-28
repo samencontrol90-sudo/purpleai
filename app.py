@@ -6,7 +6,7 @@ import re
 
 st.set_page_config(page_title="Purple AI", page_icon="🟣", layout="wide")
 
-# احراز هویت
+# ---------- احراز هویت ----------
 if "auth" not in st.session_state:
     st.session_state.auth = False
 if not st.session_state.auth:
@@ -20,7 +20,7 @@ if not st.session_state.auth:
             st.error("رمز اشتباه!")
     st.stop()
 
-# طراحی ظاهری
+# ---------- ظاهر ----------
 st.markdown("""<style>
 .logo-circle {width:80px;height:80px;border-radius:50%;background:#9b59b6;display:flex;align-items:center;justify-content:center;font-size:40px;color:white;font-weight:bold;font-family:Arial;margin:20px auto;box-shadow:0 4px 15px rgba(155,89,182,0.4);}
 </style><div class="logo-circle">C</div><h1 style='text-align:center;color:#6a1b9a;'>Purple AI</h1><hr>""", unsafe_allow_html=True)
@@ -31,7 +31,7 @@ menu = st.sidebar.radio("وظیفه", [
     "🛒 فروشگاه", "👨‍💻 مهندس IT"
 ])
 
-# ========== توابع کمکی ==========
+# ---------- توابع ----------
 def hf_api(model, data, is_binary=False):
     url = f"https://api-inference.huggingface.co/models/{model}"
     headers = {"Authorization": f"Bearer {os.getenv('HF_TOKEN')}"}
@@ -47,15 +47,11 @@ def is_persian(text):
     return bool(re.search(r'[\u0600-\u06FF]', text))
 
 def translate(text, src, tgt):
-    model_map = {
-        ("fa", "en"): "Helsinki-NLP/opus-mt-fa-en",
-        ("en", "fa"): "Helsinki-NLP/opus-mt-en-fa"
-    }
-    model = model_map.get((src, tgt), "Helsinki-NLP/opus-mt-en-fa")
+    model = "Helsinki-NLP/opus-mt-fa-en" if (src, tgt) == ("fa", "en") else "Helsinki-NLP/opus-mt-en-fa"
     res = hf_api(model, {"inputs": text})
-    if res and isinstance(res, list):
+    if res and isinstance(res, list) and 'translation_text' in res[0]:
         return res[0]['translation_text']
-    return text  # fallback
+    return text
 
 # ========== بخش‌ها ==========
 if menu == "💬 چت":
@@ -65,10 +61,7 @@ if menu == "💬 چت":
     if st.button("ارسال") and u:
         st.session_state.msgs.append(("👤", u))
         res = hf_api("microsoft/DialoGPT-small", {"inputs": u})
-        if res and isinstance(res, list) and 'generated_text' in res[0]:
-            reply = res[0]['generated_text'].replace(u, "").strip()
-        else:
-            reply = "خطا در دریافت پاسخ"
+        reply = res[0]['generated_text'].replace(u, "").strip() if res and isinstance(res, list) else "خطا"
         st.session_state.msgs.append(("🤖", reply))
     for s, m in st.session_state.msgs: st.markdown(f"**{s}** {m}")
 
@@ -82,10 +75,8 @@ elif menu == "🖼️ عکس":
                               headers={"Authorization": f"Bearer {os.getenv('HF_TOKEN')}"},
                               files={"file": up.getvalue()})
             if r.status_code == 200:
-                for pred in r.json()[:3]:
-                    st.write(f"{pred['label']}: {pred['score']:.2%}")
-            else:
-                st.error("خطا در تحلیل عکس")
+                for pred in r.json()[:3]: st.write(f"{pred['label']}: {pred['score']:.2%}")
+            else: st.error("خطا")
 
 elif menu == "🌍 ترجمه":
     st.subheader("ترجمه هوشمند")
@@ -112,17 +103,16 @@ elif menu == "🎥 ویدیو":
                 with open(fname, "wb") as f: f.write(vid)
                 st.video(fname)
                 st.download_button("دانلود", open(fname,"rb"), file_name=fname)
-            else:
-                st.error("ساخت ویدیو با خطا مواجه شد")
+            else: st.error("خطا در ساخت ویدیو")
 
 elif menu == "🏥 پزشکی":
     st.subheader("🩺 مشاورهٔ پزشکی (آموزشی)")
     st.warning("⚠️ فقط آموزشی. به پزشک مراجعه کنید.")
     topics = {
-        "دیابت": "Type 2 diabetes is a chronic condition that affects the way the body processes blood sugar...",
-        "فشار خون": "Hypertension is a condition in which the force of the blood against the artery walls is too high...",
-        "کرونا": "COVID-19 is an infectious disease caused by the SARS-CoV-2 virus...",
-        "سرماخوردگی": "The common cold is a viral infection of the nose and throat..."
+        "دیابت": "Type 2 diabetes is a chronic condition...",
+        "فشار خون": "Hypertension is a condition...",
+        "کرونا": "COVID-19 is an infectious disease...",
+        "سرماخوردگی": "The common cold is a viral infection..."
     }
     topic = st.selectbox("موضوع", list(topics.keys()))
     ctx = topics[topic]
@@ -134,16 +124,15 @@ elif menu == "🏥 پزشکی":
         if ans and 'answer' in ans:
             st.write(ans['answer'])
             st.caption(f"امتیاز: {ans['score']:.2%}")
-        else:
-            st.error("خطا در دریافت پاسخ")
+        else: st.error("خطا")
 
 elif menu == "🛡️ نظامی":
     st.subheader("🛡️ تحلیل استراتژیک (آموزشی)")
     topics = {
         "جنگ هیبریدی": "Hybrid warfare blends conventional...",
-        "پدافند غیرعامل": "Passive defense refers to measures...",
+        "پدافند غیرعامل": "Passive defense refers...",
         "فناوری‌های نوظهور": "Emerging defense technologies...",
-        "بازدارندگی": "Deterrence strategy aims to prevent..."
+        "بازدارندگی": "Deterrence strategy aims..."
     }
     topic = st.selectbox("موضوع", list(topics.keys()))
     ctx = topics[topic]
@@ -155,8 +144,7 @@ elif menu == "🛡️ نظامی":
         if ans and 'answer' in ans:
             st.write(ans['answer'])
             st.caption(f"امتیاز: {ans['score']:.2%}")
-        else:
-            st.error("خطا در تحلیل")
+        else: st.error("خطا")
 
 elif menu == "🔍 جستجوی وب":
     st.subheader("جستجوی وب با Google")
@@ -165,7 +153,7 @@ elif menu == "🔍 جستجوی وب":
     if not api_key or not cx:
         st.error("کلیدهای Google API در Secrets تنظیم نشده.")
     else:
-        q = st.text_input("عبارت جستجو:")
+        q = st.text_input("عبارت:")
         if st.button("جستجو") and q:
             r = requests.get("https://www.googleapis.com/customsearch/v1",
                              params={"key": api_key, "cx": cx, "q": q, "num": 5})
@@ -173,8 +161,7 @@ elif menu == "🔍 جستجوی وب":
                 for item in r.json().get("items", []):
                     st.markdown(f"**{item['title']}**  \n{item['snippet']}  \n[{item['link']}]({item['link']})")
                     st.divider()
-            else:
-                st.error("خطا در جستجو")
+            else: st.error("خطا")
 
 elif menu == "🛒 فروشگاه":
     st.subheader("فروشگاه آزمایشی")
@@ -182,8 +169,7 @@ elif menu == "🛒 فروشگاه":
     products = {"هدفون بی‌سیم": 350000, "کتاب پایتون": 120000, "اشتراک VPN": 90000}
     c1, c2 = st.columns(2)
     with c1:
-        for name, price in products.items():
-            st.write(f"- {name}: {price:,} تومان")
+        for n, p in products.items(): st.write(f"- {n}: {p:,} تومان")
     with c2:
         choice = st.selectbox("محصول", list(products.keys()))
         if st.button("افزودن به سبد"):
@@ -191,8 +177,7 @@ elif menu == "🛒 فروشگاه":
             st.success("اضافه شد")
     if st.session_state.cart:
         total = sum(p for _, p in st.session_state.cart)
-        for item, price in st.session_state.cart:
-            st.write(f"- {item}: {price:,} تومان")
+        for item, price in st.session_state.cart: st.write(f"- {item}: {price:,} تومان")
         st.write(f"**جمع: {total:,} تومان**")
         if st.button("ثبت سفارش (آزمایشی)"):
             st.balloons()
@@ -219,8 +204,7 @@ elif menu == "👨‍💻 مهندس IT":
         elif free_q:
             q = free_q
         else:
-            st.warning("لطفاً یک مشکل انتخاب یا تایپ کن.")
-            st.stop()
+            st.warning("لطفاً سوالی وارد کن."); st.stop()
         if is_persian(q): q = translate(q, "fa", "en")
         prompt = "You are a skilled IT engineer. Answer helpfully: " + q
         res = hf_api("microsoft/DialoGPT-small", {"inputs": prompt})

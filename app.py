@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import os
 import time
-from googletrans import Translator
+import re
 
 st.set_page_config(page_title="Purple AI", page_icon="🟣", layout="wide")
 
@@ -24,21 +24,40 @@ st.markdown("""<style>
 </style><div class="logo-circle">C</div><h1 style='text-align:center;color:#6a1b9a;'>Purple AI</h1><hr>""", unsafe_allow_html=True)
 
 menu = st.sidebar.radio("وظیفه", ["💬 چت", "🖼️ عکس", "🌍 ترجمه", "🎥 ویدیو", "🏥 پزشکی", "🛡️ نظامی", "🔍 جستجوی وب", "🛒 فروشگاه", "👨‍💻 مهندس IT"])
-tr = Translator()
 
-def query_hf(model_name, payload):
+def query_hf(model_name, payload, is_binary=False):
     API_URL = f"https://api-inference.huggingface.co/models/{model_name}"
     headers = {"Authorization": f"Bearer {os.getenv('HF_TOKEN')}"}
     try:
         r = requests.post(API_URL, headers=headers, json=payload, timeout=60)
         if r.status_code == 200:
-            return r.json() if r.headers.get('content-type') != 'video/mp4' else r.content
+            if is_binary:
+                return r.content
+            return r.json()
         else:
             return None
     except:
         return None
 
-# ========== چت ==========
+def is_persian(text):
+    return bool(re.search(r'[\u0600-\u06FF]', text))
+
+def translate_text(text, source_lang, target_lang):
+    if source_lang == "fa" and target_lang == "en":
+        model = "Helsinki-NLP/opus-mt-fa-en"
+    elif source_lang == "en" and target_lang == "fa":
+        model = "Helsinki-NLP/opus-mt-en-fa"
+    else:
+        model = "Helsinki-NLP/opus-mt-en-fa"
+        if source_lang != "en":
+            text = translate_text(text, source_lang, "en")
+    res = query_hf(model, {"inputs": text})
+    if res and isinstance(res, list) and 'translation_text' in res[0]:
+        return res[0]['translation_text']
+    elif res and isinstance(res, dict) and 'translation_text' in res:
+        return res['translation_text']
+    return text
+
 if menu == "💬 چت":
     st.subheader("چت با Purple AI")
     if "msgs" not in st.session_state: st.session_state.msgs = []
@@ -50,7 +69,6 @@ if menu == "💬 چت":
         st.session_state.msgs.append(("🤖", reply))
     for s, m in st.session_state.msgs: st.markdown(f"**{s}** {m}")
 
-# ========== عکس ==========
 elif menu == "🖼️ عکس":
     st.subheader("تشخیص عکس")
     up = st.file_uploader("عکس", type=["jpg","png","jpeg"])
@@ -64,23 +82,26 @@ elif menu == "🖼️ عکس":
                 for res in r.json()[:3]: st.write(f"{res['label']}: {res['score']:.2%}")
             else: st.error("خطا در تحلیل عکس")
 
-# ========== ترجمه ==========
 elif menu == "🌍 ترجمه":
-    st.subheader("ترجمه")
-    txt = st.text_area("متن")
+    st.subheader("ترجمه هوشمند")
+    txt = st.text_area("متن خود را وارد کنید:")
     if st.button("ترجمه") and txt:
-        det = tr.detect(txt)
-        dest = 'en' if det.lang == 'fa' else 'fa'
-        res = tr.translate(txt, dest=dest)
-        st.success(f"{det.lang} → {dest}: {res.text}")
+        if is_persian(txt):
+            translated = translate_text(txt, "fa", "en")
+            st.success("فارسی → انگلیسی")
+        else:
+            translated = translate_text(txt, "en", "fa")
+            st.success("انگلیسی → فارسی")
+        st.write(translated)
 
-# ========== ویدیو ==========
 elif menu == "🎥 ویدیو":
     st.subheader("تولید ویدیو")
     prompt = st.text_input("صحنه (انگلیسی)")
     if st.button("ساخت") and prompt:
         with st.spinner("۳-۵ دقیقه صبر..."):
-            vid = query_hf("ali-vilab/modelscope-damo-text-to-video-synthesis", {"inputs": prompt, "options": {"wait_for_model": True}})
+            vid = query_hf("ali-vilab/modelscope-damo-text-to-video-synthesis",
+                           {"inputs": prompt, "options": {"wait_for_model": True}},
+                           is_binary=True)
             if isinstance(vid, bytes):
                 fname = f"video_{int(time.time())}.mp4"
                 with open(fname, "wb") as f: f.write(vid)
@@ -88,7 +109,6 @@ elif menu == "🎥 ویدیو":
                 st.download_button("دانلود", open(fname,"rb"), file_name=fname)
             else: st.error("خطا در ساخت ویدیو")
 
-# ========== پزشکی ==========
 elif menu == "🏥 پزشکی":
     st.subheader("🩺 مشاورهٔ پزشکی (آموزشی)")
     st.warning("⚠️ فقط آموزشی. به پزشک مراجعه کنید.")
@@ -98,11 +118,10 @@ elif menu == "🏥 پزشکی":
     st.markdown(f"**مرجع:** {ctx}")
     q = st.text_input("سوال:")
     if st.button("پاسخ") and q:
-        if any('\u0600' <= c <= '\u06FF' for c in q): q = tr.translate(q, dest='en').text
+        if is_persian(q): q = translate_text(q, "fa", "en")
         ans = query_hf("ktrapeznikov/biobert_v1.1_pubmed_squad_v2", {"question": q, "context": ctx})
         st.write(ans['answer'] if ans and 'answer' in ans else "خطا")
 
-# ========== نظامی ==========
 elif menu == "🛡️ نظامی":
     st.subheader("🛡️ تحلیل استراتژیک (آموزشی)")
     mil = {"جنگ هیبریدی": "Hybrid warfare blends conventional...", "پدافند غیرعامل": "Passive defense refers...", "فناوری‌های نوظهور": "Emerging defense technologies...", "بازدارندگی": "Deterrence strategy aims..."}
@@ -111,11 +130,10 @@ elif menu == "🛡️ نظامی":
     st.markdown(f"**مرجع:** {ctx}")
     q = st.text_input("سوال:")
     if st.button("تحلیل") and q:
-        if any('\u0600' <= c <= '\u06FF' for c in q): q = tr.translate(q, dest='en').text
+        if is_persian(q): q = translate_text(q, "fa", "en")
         ans = query_hf("distilbert-base-cased-distilled-squad", {"question": q, "context": ctx})
         st.write(ans['answer'] if ans and 'answer' in ans else "خطا")
 
-# ========== جستجوی وب ==========
 elif menu == "🔍 جستجوی وب":
     st.subheader("جستجوی وب با Google")
     api_key = os.getenv("GOOGLE_API_KEY")
@@ -131,7 +149,6 @@ elif menu == "🔍 جستجوی وب":
                     st.divider()
             else: st.error("خطا")
 
-# ========== فروشگاه ==========
 elif menu == "🛒 فروشگاه":
     st.subheader("فروشگاه آزمایشی")
     if "cart" not in st.session_state: st.session_state.cart = []
@@ -153,7 +170,6 @@ elif menu == "🛒 فروشگاه":
             st.success("سفارش ثبت شد (شبیه‌سازی)")
             st.session_state.cart = []
 
-# ========== مهندس IT ==========
 elif menu == "👨‍💻 مهندس IT":
     st.subheader("👨‍💻 مهندس IT")
     issues = {"وای‌فای قطع شده": "WiFi keeps disconnecting on Windows 11", "کندی ویندوز": "Windows 10 running very slow, how to speed up", "نصب پایتون": "How to install Python on Windows 11", "رفع ارور 404": "What does HTTP 404 error mean and how to fix", "مشکل پرینتر": "Printer not responding, troubleshooting steps"}
@@ -164,7 +180,7 @@ elif menu == "👨‍💻 مهندس IT":
         if selected != "(انتخاب کنید)": q = issues[selected]
         elif free_q: q = free_q
         else: st.warning("لطفاً سوال وارد کن."); st.stop()
-        if any('\u0600' <= c <= '\u06FF' for c in q): q = tr.translate(q, dest='en').text
+        if is_persian(q): q = translate_text(q, "fa", "en")
         prompt = "You are a skilled and friendly IT engineer. Give a helpful answer: " + q
         res = query_hf("microsoft/DialoGPT-small", {"inputs": prompt})
         reply = res[0]['generated_text'].split(prompt)[-1].strip() if res and isinstance(res, list) and 'generated_text' in res[0] else "خطا"

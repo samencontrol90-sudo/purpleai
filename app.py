@@ -1,5 +1,5 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 
 # ====== تنظیمات صفحه ======
 st.set_page_config(page_title="دستیار همه‌فن‌حریف", page_icon="🤖")
@@ -11,7 +11,8 @@ if not api_key:
     st.warning("برای شروع گفتگو، کلید API را وارد کن.")
     st.stop()
 
-openai.api_key = api_key
+# ساخت کلاینت جدید
+client = OpenAI(api_key=api_key)
 
 # ====== پرامپت سیستم (شخصیت چندتخصصه) ======
 SYSTEM_PROMPT = """تو یک دستیار همه‌فن‌حریف و فوق‌حرفه‌ای هستی با تخصص‌های زیر که هر کدام را در بالاترین سطح بلدی. در پاسخ‌هایت بنا به نیاز از یک یا چند تخصص استفاده کن. دقیق، علمی، کاربردی و دوستانه باش.
@@ -69,12 +70,12 @@ if prompt := st.chat_input("سؤالت را اینجا بنویس..."):
     with st.chat_message("user"):
         st.write(prompt)
 
-    # دریافت پاسخ از OpenAI
+    # دریافت پاسخ از OpenAI (API جدید)
     with st.chat_message("assistant"):
         with st.spinner("در حال فکر کردن..."):
             try:
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",   # می‌تونی gpt-4 هم بذاری
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",   # می‌تونی gpt-4o رو هم بذاری
                     messages=st.session_state.messages,
                     temperature=0.7,
                     max_tokens=1000

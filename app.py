@@ -3,9 +3,9 @@ import streamlit as st
 from openai import OpenAI
 import PyPDF2
 import docx
+import subprocess
 import tempfile
 import os
-from gtts import gTTS
 import json
 
 st.set_page_config(page_title="دستیار همه‌فن‌حریف", page_icon="🤖")
@@ -28,79 +28,146 @@ model_name = st.selectbox(
     index=0
 )
 
-SYSTEM_PROMPT = """تو یک دستیار همه‌فن‌حریف و فوق‌حرفه‌ای هستی با تخصص‌های زیر ..."""  # (کاملش رو قبلاً نوشتی، همون رو بذار)
+SYSTEM_PROMPT = """تو یک دستیار همه‌فن‌حریف و فوق‌حرفه‌ای هستی با تخصص‌های زیر که هر کدام را در بالاترین سطح بلدی. در پاسخ‌هایت بنا به نیاز از یک یا چند تخصص استفاده کن. دقیق، علمی، کاربردی و دوستانه باش.
+
+لیست تخصص‌ها:
+- مهندس برق صنعتی
+- آشپز حرفه‌ای
+- کارشناس طلا و ارز
+- مهندس حرفه‌ای الکترونیک
+- مهندس ساختمان حرفه‌ای و پرسابقه
+- کشاورز حرفه‌ای
+- گل‌شناس آپارتمانی
+- جانورشناس
+- روانشناس
+- کارشناس دینی حرفه‌ای و مجتهد
+- پوسترساز حرفه‌ای
+- ادیتور حرفه‌ای
+- گوشی‌شناس حرفه‌ای
+- درخت‌شناس حرفه‌ای
+- رفیق مشتی
+- مخترع حرفه‌ای
+- کتابخوان حرفه‌ای
+- کوهنورد حرفه‌ای
+- دوچرخه‌سوار پُرتجربه
+- استاد جوجیتسو برزیلی (بهترینِ بی‌رقیب)
+- نویسنده
+- یخچال‌ساز
+- تعمیرکار لباسشویی
+- تعمیرکار ماشین ظرفشویی
+- مربی بدنسازی
+- جامعه‌ساز پُرتجربه
+
+نحوه‌ی پاسخ:
+- اول با ایموجی و نام تخصص مربوطه شروع کن (مثلاً 🏗️ مهندس ساختمان).
+- مثل یه رفیق مشتی صمیمی باش ولی دقت علمی را حفظ کن.
+- اگر سؤالی خارج از تخصص‌ها بود، تلاش کن کمک کنی وگرنه صادقانه بگو تخصص نداری."""
 
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+if "tts_request" not in st.session_state:
+    st.session_state.tts_request = None
+if "audio_files" not in st.session_state:
+    st.session_state.audio_files = {}
+
 # ==================== توابع کمکی ====================
 
 def extract_text_from_file(uploaded_file):
-    # (همان کد قبلی)
-    ...
+    if uploaded_file is None:
+        return ""
+    file_type = uploaded_file.type
+    try:
+        if file_type == "text/plain":
+            return uploaded_file.read().decode("utf-8")
+        elif file_type == "application/pdf":
+            reader = PyPDF2.PdfReader(uploaded_file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+            return text
+        elif file_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            doc = docx.Document(uploaded_file)
+            text = "\n".join([para.text for para in doc.paragraphs])
+            return text
+        else:
+            return ""
+    except Exception as e:
+        st.error(f"خطا در خواندن فایل: {e}")
+        return ""
 
 def transcribe_audio(audio_bytes):
-    # (همان کد قبلی با Groq Whisper)
-    ...
+    try:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-large-v3",
+            file=("audio.wav", audio_bytes, "audio/wav"),
+            response_format="text"
+        )
+        return transcript
+    except Exception as e:
+        st.error(f"خطا در تبدیل صوت: {e}")
+        return ""
 
 def text_to_speech(text):
-    """تولید فایل صوتی با gTTS"""
-    tts = gTTS(text=text, lang='fa', slow=False)
+    """ساخت فایل صوتی با edge-tts (صدای فرید فارسی)"""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-        tts.save(tmp.name)
-        return tmp.name
+        path = tmp.name
+    try:
+        subprocess.run(
+            ["edge-tts", "--voice", "fa-IR-FaridNeural", "--text", text, "--write-media", path],
+            check=True, capture_output=True, text=True
+        )
+        return path
+    except subprocess.CalledProcessError as e:
+        st.error(f"خطا در ساخت صدا: {e.stderr}")
+        return None
 
 # ==================== تاریخچه چت (دانلود/بارگذاری) ====================
 col1, col2 = st.columns(2)
 with col1:
-    # دکمه دانلود تاریخچه
     if st.button("📥 دانلود تاریخچه"):
-        chat_history = [msg for msg in st.session_state.messages if msg["role"] != "system"]
-        json_str = json.dumps(chat_history, ensure_ascii=False, indent=2)
+        chat_data = [msg for msg in st.session_state.messages if msg["role"] != "system"]
         st.download_button(
-            label="کلیک کن و فایل را ذخیره کن",
-            data=json_str,
+            label="💾 کلیک کن و ذخیره کن",
+            data=json.dumps(chat_data, ensure_ascii=False, indent=2),
             file_name="chat_history.json",
             mime="application/json"
         )
 with col2:
-    # بارگذاری تاریخچه
-    uploaded_history = st.file_uploader("📂 بارگذاری تاریخچه (JSON)", type=["json"])
-    if uploaded_history is not None:
+    uploaded_hist = st.file_uploader("📂 بارگذاری تاریخچه (JSON)", type=["json"], key="hist_upload")
+    if uploaded_hist is not None:
         try:
-            loaded = json.load(uploaded_history)
-            # جایگزینی پیام‌ها (سیستم پرامپت حفظ می‌شود)
+            loaded = json.load(uploaded_hist)
             st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}] + loaded
-            st.success("تاریخچه بارگذاری شد!")
+            st.success("تاریخچه با موفقیت بارگذاری شد!")
             st.rerun()
         except Exception as e:
             st.error(f"خطا در بارگذاری: {e}")
 
-# ==================== بخش آپلود فایل ====================
-uploaded_file = st.file_uploader("📎 فایل ضمیمه", type=["txt", "pdf", "docx"])
+# ==================== ورودی‌ها ====================
+uploaded_file = st.file_uploader("📎 فایل ضمیمه (txt, pdf, docx)", type=["txt", "pdf", "docx"])
 
-# ==================== ورودی صوتی ====================
-audio_value = st.audio_input("🎤 سؤال صوتی")
+audio_value = st.audio_input("🎤 سؤال صوتی (صحبت کن)")
 user_text = ""
+
 if audio_value is not None:
-    with st.spinner("در حال تبدیل صوت..."):
+    with st.spinner("در حال تبدیل صوت به متن..."):
         audio_bytes = audio_value.getvalue() if hasattr(audio_value, "getvalue") else audio_value.read()
         user_text = transcribe_audio(audio_bytes)
         if user_text:
-            st.success(f"متن: {user_text}")
+            st.success(f"متن تشخیص داده شد: {user_text}")
 
-# ==================== ورودی متنی ====================
 prompt = st.chat_input("سؤالت را اینجا بنویس...") if not user_text else None
 
 if user_text or prompt:
     final_input = user_text if user_text else prompt
-    if uploaded_file:
+    if uploaded_file is not None:
         file_content = extract_text_from_file(uploaded_file)
         if file_content:
-            final_input = f"محتوای فایل:\n{file_content}\n\nسؤال:\n{final_input}"
+            final_input = f"محتوای فایل ضمیمه:\n{file_content}\n\nسؤال کاربر:\n{final_input}"
     st.session_state.messages.append({"role": "user", "content": final_input})
 
-# ==================== نمایش تاریخچه و دکمه صوتی ====================
+# ==================== نمایش تاریخچه + مدیریت دکمه صوتی ====================
 for i, msg in enumerate(st.session_state.messages):
     if msg["role"] == "user":
         with st.chat_message("user"):
@@ -108,11 +175,19 @@ for i, msg in enumerate(st.session_state.messages):
     elif msg["role"] == "assistant":
         with st.chat_message("assistant"):
             st.write(msg["content"])
+            # دکمه صوتی
             if st.button("🔊 خواندن پاسخ", key=f"speak_{i}"):
-                with st.spinner("در حال ساخت صدا..."):
-                    audio_path = text_to_speech(msg["content"])
-                    st.audio(audio_path, format="audio/mp3")
-                    os.unlink(audio_path)
+                st.session_state.tts_request = i
+                st.rerun()
+            # اگر درخواست صدا برای این پیام فعال است، صدا را بساز و پخش کن
+            if st.session_state.tts_request == i:
+                if i not in st.session_state.audio_files:
+                    with st.spinner("در حال ساخت صدا..."):
+                        path = text_to_speech(msg["content"])
+                        if path:
+                            st.session_state.audio_files[i] = path
+                if i in st.session_state.audio_files:
+                    st.audio(st.session_state.audio_files[i], format="audio/mp3")
 
 # ==================== تولید پاسخ ====================
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
@@ -128,5 +203,8 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 reply = response.choices[0].message.content
                 st.write(reply)
                 st.session_state.messages.append({"role": "assistant", "content": reply})
+                # ریست کردن پرچم‌های صوتی قدیمی برای پاسخ جدید
+                st.session_state.tts_request = None
+                st.session_state.audio_files = {}
             except Exception as e:
                 st.error(f"خطا: {e}")

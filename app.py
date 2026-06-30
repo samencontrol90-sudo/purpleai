@@ -2,15 +2,23 @@
 import streamlit as st
 from openai import OpenAI
 
-st.set_page_config(page_title="دستیار همه‌فن‌حریف", page_icon="🤖")
-st.title("🤖 دستیار همه‌فن‌حریف من")
+st.set_page_config(page_title="دستیار همه‌فن‌حریف رایگان", page_icon="🤖")
+st.title("🤖 دستیار همه‌فن‌حریف (رایگان با Groq)")
 
-api_key = st.text_input("🔑 کلید API OpenAI خود را وارد کن:", type="password")
+# ====== دریافت کلید Groq ======
+api_key = st.text_input("🔑 کلید API رایگان Groq را وارد کن (gsk_...):", type="password")
 if not api_key:
-    st.warning("برای شروع گفتگو، کلید API را وارد کن.")
+    st.warning("کلید Groq را وارد کن. از console.groq.com بگیر.")
     st.stop()
 
-client = OpenAI(api_key=api_key)
+# اتصال به Groq به‌جای OpenAI
+client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=api_key
+)
+
+# مدل‌های رایگان پیشنهادی (می‌تونی عوض کنی)
+model_name = st.selectbox("مدل:", ["llama-3.2-3b-preview", "mixtral-8x7b-32768", "gemma2-9b-it"], index=0)
 
 SYSTEM_PROMPT = """تو یک دستیار همه‌فن‌حریف و فوق‌حرفه‌ای هستی با تخصص‌های زیر که هر کدام را در بالاترین سطح بلدی. در پاسخ‌هایت بنا به نیاز از یک یا چند تخصص استفاده کن. دقیق، علمی، کاربردی و دوستانه باش.
 
@@ -67,7 +75,7 @@ if prompt := st.chat_input("سؤالت را اینجا بنویس..."):
         with st.spinner("در حال فکر کردن..."):
             try:
                 response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                    model=model_name,
                     messages=st.session_state.messages,
                     temperature=0.7,
                     max_tokens=1000
@@ -76,4 +84,4 @@ if prompt := st.chat_input("سؤالت را اینجا بنویس..."):
                 st.write(reply)
                 st.session_state.messages.append({"role": "assistant", "content": reply})
             except Exception as e:
-                st.error(f"خطا در ارتباط با OpenAI: {e}")
+                st.error(f"خطا: {e}")

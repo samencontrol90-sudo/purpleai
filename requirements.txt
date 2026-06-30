@@ -4,3 +4,4 @@ PyPDF2
 python-docx
 edge-tts
 Pillow
+opencv-python-headless

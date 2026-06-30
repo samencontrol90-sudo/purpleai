@@ -8,9 +8,11 @@ import tempfile
 import os
 import json
 import base64
+from PIL import Image
+import io
 
 st.set_page_config(page_title="دستیار همه‌فن‌حریف", page_icon="🤖")
-st.title("🤖 دستیار همه‌فن‌حریف (مکالمه صوتی هوشمند)")
+st.title("🤖 دستیار همه‌فن‌حریف (مکالمه صوتی + تصویر)")
 
 # ========== API و مدل ==========
 api_key = st.text_input("🔑 کلید API رایگان Groq را وارد کن (gsk_...):", type="password")
@@ -25,14 +27,20 @@ client = OpenAI(
 
 model_name = st.selectbox(
     "مدل:",
-    ["llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it", "llama-3.3-70b-versatile"],
+    [
+        "llama-3.2-11b-vision-preview",  # مدل بینایی (پیش‌فرض برای پشتیبانی از عکس)
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+        "llama-3.3-70b-versatile",
+    ],
     index=0
 )
 
-# ========== حالت مکالمه صوتی ==========
 voice_mode = st.toggle("🎙️ مکالمه صوتی (پاسخ‌ها خودکار خوانده شوند)", value=True)
 
 SYSTEM_PROMPT = """تو یک دستیار همه‌فن‌حریف و فوق‌حرفه‌ای هستی که به‌ازای هر سؤال، دقیقاً یک تخصص از میان تخصص‌های زیر را انتخاب می‌کنی و از دید همان متخصص پاسخ می‌دهی. هرگز چند تخصص را با هم ترکیب نکن. برای هر سؤال جدید، دوباره تخصص مناسب را برگزین و تخصص قبلی را فراموش کن. اگر سؤال به هیچ‌یک از تخصص‌هایت مربوط نبود، مؤدبانه بگو در آن زمینه تخصص نداری و راهنمایی جایگزین بده.
+اگر کاربر تصویری ارسال کرد، می‌توانی محتوای آن را تحلیل کنی و بر اساس آن پاسخ دهی.
 
 لیست تخصص‌ها (همیشه یکی را انتخاب کن):
 - مهندس برق صنعتی
@@ -74,10 +82,10 @@ if "messages" not in st.session_state:
 # ========== توابع ==========
 def extract_text_from_file(uploaded_file):
     if uploaded_file is None:
-        return ""
+        return None
     file_type = uploaded_file.type
     try:
-        if file_type == "text/plain":
+        if file_type.startswith("text/plain"):
             return uploaded_file.read().decode("utf-8")
         elif file_type == "application/pdf":
             reader = PyPDF2.PdfReader(uploaded_file)
@@ -89,10 +97,10 @@ def extract_text_from_file(uploaded_file):
             doc = docx.Document(uploaded_file)
             return "\n".join([para.text for para in doc.paragraphs])
         else:
-            return ""
+            return None  # برای عکس‌ها
     except Exception as e:
         st.error(f"خطا در خواندن فایل: {e}")
-        return ""
+        return None
 
 def transcribe_audio(audio_bytes):
     try:
@@ -107,7 +115,6 @@ def transcribe_audio(audio_bytes):
         return ""
 
 def text_to_speech(text):
-    """ساخت فایل صوتی با edge-tts (صدای فرید فارسی)"""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
         path = tmp.name
     try:
@@ -121,7 +128,6 @@ def text_to_speech(text):
         return None
 
 def autoplay_audio(file_path):
-    """پخش خودکار صدا (مخفی) بدون کلیک"""
     with open(file_path, "rb") as f:
         data = f.read()
         b64 = base64.b64encode(data).decode()
@@ -155,8 +161,14 @@ with col2:
             st.error(f"خطا: {e}")
 
 # ========== ورودی‌ها ==========
-uploaded_file = st.file_uploader("📎 فایل ضمیمه (txt, pdf, docx)", type=["txt", "pdf", "docx"])
+# آپلود فایل (پشتیبانی از عکس و متن – چندتایی)
+uploaded_files = st.file_uploader(
+    "📎 فایل ضمیمه (txt, pdf, docx, jpg, png) - می‌تونی چندتا انتخاب کنی",
+    type=["txt", "pdf", "docx", "jpg", "jpeg", "png"],
+    accept_multiple_files=True
+)
 
+# ورودی صوتی
 col_audio, col_text = st.columns([1, 3])
 with col_audio:
     audio_value = st.audio_input("🎤 بگو")
@@ -174,17 +186,56 @@ with col_text:
 
 if user_text or prompt:
     final_input = user_text if user_text else prompt
-    if uploaded_file is not None:
-        file_content = extract_text_from_file(uploaded_file)
-        if file_content:
-            final_input = f"محتوای فایل:\n{file_content}\n\nسؤال:\n{final_input}"
-    st.session_state.messages.append({"role": "user", "content": final_input})
+    user_content = []
+
+    # اگر فایل آپلود شده باشد
+    if uploaded_files:
+        for file in uploaded_files:
+            file_type = file.type
+            # عکس‌ها
+            if file_type in ["image/jpeg", "image/png", "image/jpg"]:
+                # نمایش عکس
+                image = Image.open(file)
+                st.image(image, caption=file.name, width=200)
+                # تبدیل به base64 برای ارسال به مدل
+                file.seek(0)
+                img_bytes = file.read()
+                img_b64 = base64.b64encode(img_bytes).decode()
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{file_type};base64,{img_b64}"}
+                })
+            else:
+                # فایل متنی: استخراج متن و اضافه کردن به عنوان متن
+                file.seek(0)
+                text = extract_text_from_file(file)
+                if text:
+                    # متن را به صورت جداگانه به کاربر نشان نمی‌دهیم، ولی به پرامپت اضافه می‌کنیم
+                    user_content.append({
+                        "type": "text",
+                        "text": f"[محتوای فایل {file.name}]\n{text}"
+                    })
+    # اضافه کردن متن سوال
+    user_content.append({"type": "text", "text": final_input})
+
+    # ساخت پیام کاربر
+    st.session_state.messages.append({"role": "user", "content": user_content})
 
 # ========== نمایش تاریخچه ==========
 for i, msg in enumerate(st.session_state.messages):
     if msg["role"] == "user":
         with st.chat_message("user"):
-            st.write(msg["content"])
+            # اگر محتوای چندبخشی (لیست) باشد
+            if isinstance(msg["content"], list):
+                for item in msg["content"]:
+                    if item["type"] == "text":
+                        st.write(item["text"])
+                    elif item["type"] == "image_url":
+                        # نمایش تصویر از base64
+                        img_data = item["image_url"]["url"].split(",")[1]
+                        st.image(base64.b64decode(img_data))
+            else:
+                st.write(msg["content"])
     elif msg["role"] == "assistant":
         with st.chat_message("assistant"):
             st.write(msg["content"])
@@ -204,7 +255,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 st.write(reply)
                 st.session_state.messages.append({"role": "assistant", "content": reply})
 
-                # اگر مکالمه صوتی فعال باشد، خودکار صدا پخش شود
                 if voice_mode:
                     with st.spinner("🔊 گوینده..."):
                         audio_path = text_to_speech(reply)

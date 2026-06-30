@@ -12,10 +12,9 @@ from PIL import Image
 import io
 import cv2
 import numpy as np
-from datetime import timedelta
 
 st.set_page_config(page_title="دستیار همه‌فن‌حریف", page_icon="🤖")
-st.title("🤖 دستیار همه‌فن‌حریف (ویرایش ویدیو + مکالمه صوتی)")
+st.title("🤖 دستیار همه‌فن‌حریف (ویرایش ویدیو + مکالمه صوتی + تحلیل)")
 
 # ========== API و مدل ==========
 api_key = st.text_input("🔑 کلید API رایگان Groq را وارد کن (gsk_...):", type="password")
@@ -28,17 +27,15 @@ client = OpenAI(
     api_key=api_key
 )
 
-model_name = st.selectbox(
-    "مدل:",
-    [
-        "llama-3.2-11b-vision-preview",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
-        "gemma2-9b-it",
-        "llama-3.3-70b-versatile",
-    ],
-    index=0
-)
+# مدل‌های معتبر و فعال (تیر ۱۴۰۵)
+available_models = {
+    "llama-3.1-8b-instant": "Llama 3.1 8B (سریع، متنی)",
+    "llama-3.3-70b-versatile": "Llama 3.3 70B (قدرتمند، متنی)",
+    "gemma2-9b-it": "Gemma 2 9B (متنی)",
+    "mixtral-8x7b-32768": "Mixtral 8x7B (متنی)",
+    "llama-3.2-90b-vision-preview": "Llama 3.2 90B Vision (بینایی)"
+}
+model_name = st.selectbox("مدل:", list(available_models.keys()), index=0)
 
 voice_mode = st.toggle("🎙️ مکالمه صوتی (پاسخ‌ها خودکار خوانده شوند)", value=True)
 
@@ -84,26 +81,32 @@ if "messages" not in st.session_state:
 
 # ========== توابع عمومی ==========
 def extract_text_from_file(uploaded_file):
-    if uploaded_file is None: return None
+    if uploaded_file is None:
+        return None
     file_type = uploaded_file.type
     try:
-        if file_type.startswith("text/plain"): return uploaded_file.read().decode("utf-8")
+        if file_type.startswith("text/plain"):
+            return uploaded_file.read().decode("utf-8")
         elif file_type == "application/pdf":
             reader = PyPDF2.PdfReader(uploaded_file)
             return "\n".join([page.extract_text() for page in reader.pages])
         elif file_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-            return "\n".join([para.text for para in docx.Document(uploaded_file).paragraphs])
+            doc = docx.Document(uploaded_file)
+            return "\n".join([para.text for para in doc.paragraphs])
+        else:
+            return None
     except Exception as e:
         st.error(f"خطا در خواندن فایل: {e}")
-    return None
+        return None
 
 def transcribe_audio(audio_bytes):
     try:
-        return client.audio.transcriptions.create(
+        transcript = client.audio.transcriptions.create(
             model="whisper-large-v3",
             file=("audio.wav", audio_bytes, "audio/wav"),
             response_format="text"
         )
+        return transcript
     except Exception as e:
         st.error(f"خطا در تبدیل صوت: {e}")
         return ""
@@ -112,8 +115,10 @@ def text_to_speech(text):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
         path = tmp.name
     try:
-        subprocess.run(["edge-tts", "--voice", "fa-IR-FaridNeural", "--text", text, "--write-media", path],
-                       check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["edge-tts", "--voice", "fa-IR-FaridNeural", "--text", text, "--write-media", path],
+            check=True, capture_output=True, text=True
+        )
         return path
     except subprocess.CalledProcessError as e:
         st.error(f"خطا در ساخت صدا: {e.stderr}")
@@ -121,9 +126,14 @@ def text_to_speech(text):
 
 def autoplay_audio(file_path):
     with open(file_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-        st.markdown(f'<audio autoplay style="display:none"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>',
-                    unsafe_allow_html=True)
+        data = f.read()
+    b64 = base64.b64encode(data).decode()
+    md = f"""
+        <audio autoplay style="display:none">
+        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+        </audio>
+        """
+    st.markdown(md, unsafe_allow_html=True)
 
 def preprocess_image(img_bytes, max_dim=512, quality=50):
     try:
@@ -145,7 +155,8 @@ def extract_video_frames(video_bytes, num_frames=3):
     cap = cv2.VideoCapture(vpath)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if total <= 0:
-        os.unlink(vpath); return []
+        os.unlink(vpath)
+        return []
     positions = [int(total * p) for p in [0.25, 0.5, 0.75]]
     frames = []
     for pos in positions:
@@ -160,29 +171,30 @@ def extract_video_frames(video_bytes, num_frames=3):
     os.unlink(vpath)
     return frames
 
-# ========== ویرایش ویدیو با OpenCV ==========
+# ========== ویرایش ویدیو ==========
 def trim_video(video_bytes, start_sec, end_sec):
-    """بُرش بخشی از ویدیو از start_sec تا end_sec (ثانیه)"""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
         tmp.write(video_bytes)
         vpath = tmp.name
     cap = cv2.VideoCapture(vpath)
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = total_frames / fps if fps > 0 else 0
     start_frame = max(0, int(start_sec * fps))
     end_frame = min(total_frames, int(end_sec * fps))
     if start_frame >= end_frame:
-        cap.release(); os.unlink(vpath); return None, "زمان شروع باید کمتر از پایان باشد."
-
+        cap.release()
+        os.unlink(vpath)
+        return None, "زمان شروع باید کمتر از پایان باشد."
     out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = None
     current = 0
     while True:
         ret, frame = cap.read()
-        if not ret: break
-        if current >= end_frame: break
+        if not ret:
+            break
+        if current >= end_frame:
+            break
         if current >= start_frame:
             if out is None:
                 h, w = frame.shape[:2]
@@ -190,12 +202,12 @@ def trim_video(video_bytes, start_sec, end_sec):
             out.write(frame)
         current += 1
     cap.release()
-    if out: out.release()
+    if out:
+        out.release()
     os.unlink(vpath)
     return out_path, None
 
-def add_text_to_video(video_bytes, text, position="bottom", font_scale=1, color=(255,255,255)):
-    """افزودن متن روی تمام فریم‌های ویدیو"""
+def add_text_to_video(video_bytes, text, position="bottom", font_scale=1, color=(255, 255, 255)):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
         tmp.write(video_bytes)
         vpath = tmp.name
@@ -208,18 +220,19 @@ def add_text_to_video(video_bytes, text, position="bottom", font_scale=1, color=
     out = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
     while True:
         ret, frame = cap.read()
-        if not ret: break
-        # محاسبه موقعیت متن
+        if not ret:
+            break
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
         if position == "top":
             org = (10, th + 10)
         elif position == "center":
             org = ((w - tw) // 2, (h + th) // 2)
-        else:  # bottom
+        else:
             org = (10, h - 20)
         cv2.putText(frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2)
         out.write(frame)
-    cap.release(); out.release()
+    cap.release()
+    out.release()
     os.unlink(vpath)
     return out_path
 
@@ -228,36 +241,39 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("📥 دانلود تاریخچه"):
         chat_data = [msg for msg in st.session_state.messages if msg["role"] != "system"]
-        st.download_button("💾 ذخیره فایل JSON", data=json.dumps(chat_data, ensure_ascii=False, indent=2),
-                           file_name="chat_history.json", mime="application/json")
+        st.download_button(
+            "💾 ذخیره فایل JSON",
+            data=json.dumps(chat_data, ensure_ascii=False, indent=2),
+            file_name="chat_history.json",
+            mime="application/json"
+        )
 with col2:
     uploaded_hist = st.file_uploader("📂 بارگذاری تاریخچه (JSON)", type=["json"], key="hist_upload")
-    if uploaded_hist:
+    if uploaded_hist is not None:
         try:
             loaded = json.load(uploaded_hist)
             st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}] + loaded
-            st.success("تاریخچه بارگذاری شد!"); st.rerun()
+            st.success("تاریخچه بارگذاری شد!")
+            st.rerun()
         except Exception as e:
             st.error(f"خطا: {e}")
 
-# ========== بخش اصلی: ورودی و انتخاب حالت ==========
+# ========== ورودی‌ها ==========
 st.subheader("📂 فایل‌های خود را آپلود کنید")
 uploaded_files = st.file_uploader(
     "فرمت‌های مجاز: تصویر (jpg,png)، متن (txt,pdf,docx)، ویدیو (mp4,mov,avi)",
-    type=["txt","pdf","docx","jpg","jpeg","png","mp4","mov","avi"],
+    type=["txt", "pdf", "docx", "jpg", "jpeg", "png", "mp4", "mov", "avi"],
     accept_multiple_files=True
 )
 
-# اگر ویدیو آپلود شده، گزینه‌های ویرایش ظاهر شود
-edit_video = False
-if uploaded_files:
-    has_video = any(f.type.startswith("video") for f in uploaded_files)
-    if has_video:
-        action = st.radio("🎬 عملیات روی ویدیو:", ["تحلیل محتوا", "ویرایش (بُرش / متن)"], index=0)
-        if action == "ویرایش (بُرش / متن)":
-            edit_video = True
+# اگر ویدیو آپلود شده باشد و کاربر حالت ویرایش را بخواهد
+edit_mode = False
+if uploaded_files and any(f.type.startswith("video") for f in uploaded_files):
+    action = st.radio("🎬 عملیات روی ویدیو:", ["تحلیل محتوا", "ویرایش (بُرش / متن)"], index=0)
+    if action == "ویرایش (بُرش / متن)":
+        edit_mode = True
 
-if edit_video and uploaded_files:
+if edit_mode and uploaded_files:
     video_file = next(f for f in uploaded_files if f.type.startswith("video"))
     video_bytes = video_file.read()
     st.video(video_bytes)
@@ -290,7 +306,8 @@ if edit_video and uploaded_files:
                         st.download_button("⬇️ دانلود ویدیو با متن", f, file_name="text_added.mp4", mime="video/mp4")
                     os.unlink(out_path)
 
-else:   # حالت عادی چت و تحلیل
+else:
+    # حالت عادی چت و تحلیل
     col_audio, col_text = st.columns([1, 3])
     with col_audio:
         audio_value = st.audio_input("🎤 بگو")
@@ -307,64 +324,104 @@ else:   # حالت عادی چت و تحلیل
     if user_text or prompt:
         final_input = user_text if user_text else prompt
         user_content = []
+
         if uploaded_files:
             for file in uploaded_files:
                 ftype = file.type
-                if ftype in ["image/jpeg","image/png","image/jpg"]:
-                    img = Image.open(file); st.image(img, caption=file.name, width=200)
-                    file.seek(0); raw = file.read()
+                if ftype in ["image/jpeg", "image/png", "image/jpg"]:
+                    img = Image.open(file)
+                    st.image(img, caption=file.name, width=200)
+                    file.seek(0)
+                    raw = file.read()
                     optimized = preprocess_image(raw)
                     img_b64 = base64.b64encode(optimized).decode()
-                    user_content.append({"type":"image_url", "image_url":{"url":f"data:{ftype};base64,{img_b64}"}})
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{ftype};base64,{img_b64}"}
+                    })
                 elif ftype.startswith("video"):
                     st.video(file)
-                    file.seek(0); vb = file.read()
+                    file.seek(0)
+                    vb = file.read()
                     frames = extract_video_frames(vb, 3)
                     if frames:
                         cols = st.columns(len(frames))
                         for idx, fb in enumerate(frames):
                             cols[idx].image(fb, caption=f"فریم {idx+1}", width=150)
                             fb_b64 = base64.b64encode(fb).decode()
-                            user_content.append({"type":"image_url", "image_url":{"url":f"data:image/jpeg;base64,{fb_b64}"}})
-                        user_content.append({"type":"text", "text":"[این فریم‌ها از ویدیوی ارسالی استخراج شده‌اند. محتوای کلی ویدیو را توضیح بده.]"})
+                            user_content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{fb_b64}"}
+                            })
+                        user_content.append({
+                            "type": "text",
+                            "text": "[این فریم‌ها از ویدیوی ارسالی استخراج شده‌اند. لطفاً محتوای کلی ویدیو را توضیح بده.]"
+                        })
+                    else:
+                        st.warning("نتوانستیم فریمی از این ویدیو بگیریم.")
                 else:
-                    file.seek(0); txt = extract_text_from_file(file)
+                    file.seek(0)
+                    txt = extract_text_from_file(file)
                     if txt:
-                        user_content.append({"type":"text", "text":f"[محتوای فایل {file.name}]\n{txt}"})
-        user_content.append({"type":"text","text":final_input})
-        st.session_state.messages.append({"role":"user","content":user_content})
+                        user_content.append({
+                            "type": "text",
+                            "text": f"[محتوای فایل {file.name}]\n{txt}"
+                        })
 
-    # نمایش چت
+        user_content.append({"type": "text", "text": final_input})
+        st.session_state.messages.append({"role": "user", "content": user_content})
+
+    # نمایش تاریخچه
     for i, msg in enumerate(st.session_state.messages):
         if msg["role"] == "user":
             with st.chat_message("user"):
                 if isinstance(msg["content"], list):
                     for item in msg["content"]:
-                        if item["type"] == "text": st.write(item["text"])
+                        if item["type"] == "text":
+                            st.write(item["text"])
                         elif item["type"] == "image_url":
-                            st.image(base64.b64decode(item["image_url"]["url"].split(",")[1]))
-                else: st.write(msg["content"])
+                            img_data = item["image_url"]["url"].split(",")[1]
+                            st.image(base64.b64decode(img_data))
+                else:
+                    st.write(msg["content"])
         elif msg["role"] == "assistant":
             with st.chat_message("assistant"):
                 st.write(msg["content"])
 
     # تولید پاسخ
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-        last = st.session_state.messages[-1]["content"]
-        has_media = isinstance(last, list) and any(item["type"] == "image_url" for item in last)
-        spin = "🧠 تحلیل تصویر..." if has_media else "🤔 فکر کردن..."
+        last_msg = st.session_state.messages[-1]["content"]
+        has_image = isinstance(last_msg, list) and any(item["type"] == "image_url" for item in last_msg)
+
+        # انتخاب مدل مناسب
+        if has_image and "vision" not in model_name:
+            # سعی کن از مدل بینایی استفاده کنی، اگر در دسترس نبود خطا مدیریت می‌شود
+            actual_model = "llama-3.2-90b-vision-preview"
+        else:
+            actual_model = model_name
+
+        spinner_text = "🧠 تحلیل تصویر..." if has_image else "🤔 در حال فکر کردن..."
         with st.chat_message("assistant"):
-            with st.spinner(spin):
+            with st.spinner(spinner_text):
                 try:
-                    resp = client.chat.completions.create(model=model_name, messages=st.session_state.messages,
-                                                          temperature=0.7, max_tokens=1000)
-                    reply = resp.choices[0].message.content
+                    response = client.chat.completions.create(
+                        model=actual_model,
+                        messages=st.session_state.messages,
+                        temperature=0.7,
+                        max_tokens=1000
+                    )
+                    reply = response.choices[0].message.content
                     st.write(reply)
-                    st.session_state.messages.append({"role":"assistant","content":reply})
+                    st.session_state.messages.append({"role": "assistant", "content": reply})
+
                     if voice_mode:
                         with st.spinner("🔊 گوینده..."):
                             apath = text_to_speech(reply)
                             if apath:
                                 autoplay_audio(apath)
                 except Exception as e:
-                    st.error(f"خطا: {e}")
+                    error_msg = str(e)
+                    if "model" in error_msg.lower() and has_image:
+                        st.error("مدل بینایی در حال حاضر در دسترس نیست. لطفاً یکی از مدل‌های متنی را انتخاب کنید و دوباره تلاش کنید.")
+                    else:
+                        st.error(f"خطا: {e}")

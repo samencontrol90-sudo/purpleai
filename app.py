@@ -28,7 +28,7 @@ client = OpenAI(
 model_name = st.selectbox(
     "مدل:",
     [
-        "llama-3.2-11b-vision-preview",  # مدل بینایی (پیش‌فرض برای پشتیبانی از عکس)
+        "llama-3.2-11b-vision-preview",   # مدل بینایی (برای عکس)
         "llama-3.1-8b-instant",
         "mixtral-8x7b-32768",
         "gemma2-9b-it",
@@ -40,7 +40,7 @@ model_name = st.selectbox(
 voice_mode = st.toggle("🎙️ مکالمه صوتی (پاسخ‌ها خودکار خوانده شوند)", value=True)
 
 SYSTEM_PROMPT = """تو یک دستیار همه‌فن‌حریف و فوق‌حرفه‌ای هستی که به‌ازای هر سؤال، دقیقاً یک تخصص از میان تخصص‌های زیر را انتخاب می‌کنی و از دید همان متخصص پاسخ می‌دهی. هرگز چند تخصص را با هم ترکیب نکن. برای هر سؤال جدید، دوباره تخصص مناسب را برگزین و تخصص قبلی را فراموش کن. اگر سؤال به هیچ‌یک از تخصص‌هایت مربوط نبود، مؤدبانه بگو در آن زمینه تخصص نداری و راهنمایی جایگزین بده.
-اگر کاربر تصویری ارسال کرد، می‌توانی محتوای آن را تحلیل کنی و بر اساس آن پاسخ دهی.
+اگر کاربر تصویری ارسال کرد، آن را تحلیل کن و بر اساس آن پاسخ بده.
 
 لیست تخصص‌ها (همیشه یکی را انتخاب کن):
 - مهندس برق صنعتی
@@ -97,7 +97,7 @@ def extract_text_from_file(uploaded_file):
             doc = docx.Document(uploaded_file)
             return "\n".join([para.text for para in doc.paragraphs])
         else:
-            return None  # برای عکس‌ها
+            return None
     except Exception as e:
         st.error(f"خطا در خواندن فایل: {e}")
         return None
@@ -138,6 +138,23 @@ def autoplay_audio(file_path):
             """
         st.markdown(md, unsafe_allow_html=True)
 
+def preprocess_image(img_bytes):
+    """کاهش اندازهٔ عکس برای افزایش سرعت (حداکثر ۸۰۰ پیکسل)"""
+    try:
+        img = Image.open(io.BytesIO(img_bytes))
+        img = img.convert("RGB")  # اطمینان از فرمت RGB
+        width, height = img.size
+        max_dim = 800
+        if max(width, height) > max_dim:
+            ratio = max_dim / max(width, height)
+            new_size = (int(width * ratio), int(height * ratio))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85)
+        return buffer.getvalue()
+    except:
+        return img_bytes  # اگر خطا داد، همان عکس اصلی
+
 # ========== تاریخچه ==========
 col1, col2 = st.columns(2)
 with col1:
@@ -161,14 +178,12 @@ with col2:
             st.error(f"خطا: {e}")
 
 # ========== ورودی‌ها ==========
-# آپلود فایل (پشتیبانی از عکس و متن – چندتایی)
 uploaded_files = st.file_uploader(
-    "📎 فایل ضمیمه (txt, pdf, docx, jpg, png) - می‌تونی چندتا انتخاب کنی",
+    "📎 فایل ضمیمه (txt, pdf, docx, jpg, png) - چندتایی انتخاب کن",
     type=["txt", "pdf", "docx", "jpg", "jpeg", "png"],
     accept_multiple_files=True
 )
 
-# ورودی صوتی
 col_audio, col_text = st.columns([1, 3])
 with col_audio:
     audio_value = st.audio_input("🎤 بگو")
@@ -188,50 +203,42 @@ if user_text or prompt:
     final_input = user_text if user_text else prompt
     user_content = []
 
-    # اگر فایل آپلود شده باشد
     if uploaded_files:
         for file in uploaded_files:
             file_type = file.type
-            # عکس‌ها
             if file_type in ["image/jpeg", "image/png", "image/jpg"]:
-                # نمایش عکس
+                # نمایش تصویر (اصل) در چت
                 image = Image.open(file)
                 st.image(image, caption=file.name, width=200)
-                # تبدیل به base64 برای ارسال به مدل
+                # پردازش تصویر (کاهش حجم)
                 file.seek(0)
-                img_bytes = file.read()
-                img_b64 = base64.b64encode(img_bytes).decode()
+                raw = file.read()
+                optimized = preprocess_image(raw)
+                img_b64 = base64.b64encode(optimized).decode()
                 user_content.append({
                     "type": "image_url",
                     "image_url": {"url": f"data:{file_type};base64,{img_b64}"}
                 })
             else:
-                # فایل متنی: استخراج متن و اضافه کردن به عنوان متن
                 file.seek(0)
                 text = extract_text_from_file(file)
                 if text:
-                    # متن را به صورت جداگانه به کاربر نشان نمی‌دهیم، ولی به پرامپت اضافه می‌کنیم
                     user_content.append({
                         "type": "text",
                         "text": f"[محتوای فایل {file.name}]\n{text}"
                     })
-    # اضافه کردن متن سوال
     user_content.append({"type": "text", "text": final_input})
-
-    # ساخت پیام کاربر
     st.session_state.messages.append({"role": "user", "content": user_content})
 
 # ========== نمایش تاریخچه ==========
 for i, msg in enumerate(st.session_state.messages):
     if msg["role"] == "user":
         with st.chat_message("user"):
-            # اگر محتوای چندبخشی (لیست) باشد
             if isinstance(msg["content"], list):
                 for item in msg["content"]:
                     if item["type"] == "text":
                         st.write(item["text"])
                     elif item["type"] == "image_url":
-                        # نمایش تصویر از base64
                         img_data = item["image_url"]["url"].split(",")[1]
                         st.image(base64.b64decode(img_data))
             else:
@@ -240,10 +247,14 @@ for i, msg in enumerate(st.session_state.messages):
         with st.chat_message("assistant"):
             st.write(msg["content"])
 
-# ========== تولید پاسخ + پخش صوتی خودکار ==========
+# ========== تولید پاسخ ==========
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     with st.chat_message("assistant"):
-        with st.spinner("🤔 در حال فکر کردن..."):
+        # بررسی وجود تصویر در آخرین پیام
+        has_image = isinstance(st.session_state.messages[-1]["content"], list) and \
+                    any(item["type"] == "image_url" for item in st.session_state.messages[-1]["content"])
+        spinner_text = "🧠 تحلیل تصویر..." if has_image else "🤔 در حال فکر کردن..."
+        with st.spinner(spinner_text):
             try:
                 response = client.chat.completions.create(
                     model=model_name,

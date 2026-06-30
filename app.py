@@ -28,7 +28,7 @@ client = OpenAI(
 model_name = st.selectbox(
     "مدل:",
     [
-        "llama-3.2-11b-vision-preview",   # مدل بینایی (برای عکس)
+        "llama-3.2-11b-vision-preview",   # مدل بینایی
         "llama-3.1-8b-instant",
         "mixtral-8x7b-32768",
         "gemma2-9b-it",
@@ -138,22 +138,21 @@ def autoplay_audio(file_path):
             """
         st.markdown(md, unsafe_allow_html=True)
 
-def preprocess_image(img_bytes):
-    """کاهش اندازهٔ عکس برای افزایش سرعت (حداکثر ۸۰۰ پیکسل)"""
+def preprocess_image(img_bytes, max_dim=512, quality=50):
+    """کاهش شدید حجم عکس برای افزایش سرعت تحلیل"""
     try:
         img = Image.open(io.BytesIO(img_bytes))
-        img = img.convert("RGB")  # اطمینان از فرمت RGB
+        img = img.convert("RGB")
         width, height = img.size
-        max_dim = 800
         if max(width, height) > max_dim:
             ratio = max_dim / max(width, height)
             new_size = (int(width * ratio), int(height * ratio))
             img = img.resize(new_size, Image.Resampling.LANCZOS)
         buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=85)
+        img.save(buffer, format="JPEG", quality=quality)
         return buffer.getvalue()
     except:
-        return img_bytes  # اگر خطا داد، همان عکس اصلی
+        return img_bytes
 
 # ========== تاریخچه ==========
 col1, col2 = st.columns(2)
@@ -207,13 +206,13 @@ if user_text or prompt:
         for file in uploaded_files:
             file_type = file.type
             if file_type in ["image/jpeg", "image/png", "image/jpg"]:
-                # نمایش تصویر (اصل) در چت
+                # نمایش تصویر با کیفیت اصلی
                 image = Image.open(file)
                 st.image(image, caption=file.name, width=200)
-                # پردازش تصویر (کاهش حجم)
+                # فشرده‌سازی برای مدل
                 file.seek(0)
                 raw = file.read()
-                optimized = preprocess_image(raw)
+                optimized = preprocess_image(raw, max_dim=512, quality=50)
                 img_b64 = base64.b64encode(optimized).decode()
                 user_content.append({
                     "type": "image_url",
@@ -250,10 +249,9 @@ for i, msg in enumerate(st.session_state.messages):
 # ========== تولید پاسخ ==========
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     with st.chat_message("assistant"):
-        # بررسی وجود تصویر در آخرین پیام
         has_image = isinstance(st.session_state.messages[-1]["content"], list) and \
                     any(item["type"] == "image_url" for item in st.session_state.messages[-1]["content"])
-        spinner_text = "🧠 تحلیل تصویر..." if has_image else "🤔 در حال فکر کردن..."
+        spinner_text = "🧠 تحلیل تصویر (ممکن است چند ثانیه طول بکشد)..." if has_image else "🤔 در حال فکر کردن..."
         with st.spinner(spinner_text):
             try:
                 response = client.chat.completions.create(
